@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>שעון עבודה</title>
+  <meta name="description" content="דיווח שעות עבודה לעובד שעתי">
+  <meta name="theme-color" content="#0f766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="שעון עבודה">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1 id="title">שעון עבודה</h1>
+    <span id="topdate"></span>
+  </header>
+
+  <main id="view"></main>
+
+  <nav class="tabbar">
+    <a href="#home" data-tab="home"><span>🏠</span>בית</a>
+    <a href="#sheet" data-tab="sheet"><span>📋</span>גיליון</a>
+    <a href="#finish" data-tab="finish"><span>✅</span>סיום דיווח</a>
+    <a href="#settings" data-tab="settings"><span>⚙️</span>הגדרות</a>
+  </nav>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <div id="modal-body"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
