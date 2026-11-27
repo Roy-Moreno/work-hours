@@ -12,6 +12,8 @@ const DEF_SETTINGS = {
   defEnd: '16:00',
   round: 5,             // יחידת עיגול בדקות לפיזור שעות
   theme: 'auto',
+  vacQuota: 12,         // ימי חופש בשנה
+  vacExtra: {},         // { 'YYYY': ימים } — יתרה שהועברה / תיקון ידני לשנה מסוימת
 };
 const TYPES = {
   work: { label: 'עבודה', icon: '💼' },
@@ -132,6 +134,15 @@ function dayInfo(k) {
   return info;
 }
 
+// Vacation is paid at a regular day's length (settings start→end); sick days are counted but unpaid.
+function vacDayMin() { return dur(S.settings.defStart, S.settings.defEnd); }
+// Yearly vacation balance by calendar year. Future vacation days already marked count as used (planned leave).
+function vacYear(y) {
+  const used = Object.entries(S.days).filter(([k, d]) => k.startsWith(y + '-') && d.type === 'vacation').length;
+  const total = (+S.settings.vacQuota || 0) + (+(S.settings.vacExtra || {})[y] || 0);
+  return { y, used, total, left: total - used };
+}
+
 function monthStats(mk) {
   const st = { actual: 0, rep: 0, workDays: 0, repDays: 0, vacation: 0, sick: 0, holiday: 0, over: 0, repOver: 0,
     drift: 0, driftDays: 0, planned: 0, remainingWorkdays: 0, missing: 0, live: 0 };
@@ -148,8 +159,10 @@ function monthStats(mk) {
     if (i.flags.includes('missing')) st.missing++;
     if ((i.future || (i.today && !i.actual)) && i.isWorkday && (!i.type || i.type === 'work')) st.remainingWorkdays++;
   }
-  st.salaryActual = (st.actual + st.live) / 60 * S.settings.rate;
-  st.salaryRep = st.rep / 60 * S.settings.rate;
+  st.vacPay = st.vacation * vacDayMin() / 60 * S.settings.rate;
+  st.salaryActual = (st.actual + st.live) / 60 * S.settings.rate + st.vacPay;
+  st.salaryRep = st.rep / 60 * S.settings.rate + st.vacPay;
+  st.vacYear = vacYear(mk.slice(0, 4));
   st.avg = st.workDays ? st.actual / st.workDays : 0;
   st.carryIn = carryIn(mk);
   st.carryApplied = (S.months[mk] && S.months[mk].carryApplied) || 0;
@@ -247,12 +260,15 @@ function statsHTML(st, compact) {
     ['שעות בפועל', fmtH(st.actual + st.live)],
     ['ימי עבודה', st.workDays],
     ['שכר בפועל', fmtMoney(st.salaryActual)],
+    [`יתרת חופש ${st.vacYear.y || ''}`.trim(), `${st.vacYear.left} מתוך ${st.vacYear.total}`, st.vacYear.left < 0 ? 'neg' : ''],
   ];
   if (!compact) items.push(
     ['שעות מדווחות', fmtH(st.rep)],
     ['שכר לפי דיווח', fmtMoney(st.salaryRep)],
     ['ממוצע ליום', fmtH(st.avg)],
-    ['ימי חופש / מחלה', `${st.vacation} / ${st.sick}`],
+    ['ימי חופש (בתשלום)', st.vacation],
+    ['שכר חופשה', fmtMoney(st.vacPay)],
+    ['ימי מחלה (ללא תשלום)', st.sick],
     ['ימים מעל ' + fmtH(S.settings.maxDaily), st.over],
     ['שעות עתידיות שדווחו', fmtH(st.planned)],
     ['ימי עבודה שנותרו', st.remainingWorkdays],
@@ -758,6 +774,11 @@ function renderSettings() {
         <option value="auto" ${s.theme === 'auto' ? 'selected' : ''}>לפי המכשיר</option>
         <option value="light" ${s.theme === 'light' ? 'selected' : ''}>בהיר</option>
         <option value="dark" ${s.theme === 'dark' ? 'selected' : ''}>כהה</option></select></label>
+      <div class="grid2" style="margin-top:10px">
+        <label class="f">ימי חופש בשנה<input type="number" step="0.5" id="sVacQ" value="${s.vacQuota}"></label>
+        <label class="f">יתרה / תיקון ל-${todayKey().slice(0, 4)} (ימים)<input type="number" step="0.5" id="sVacX" value="${(s.vacExtra || {})[todayKey().slice(0, 4)] || 0}"></label>
+      </div>
+      <p class="small muted" style="margin:0 0 8px">יום חופש משולם לפי שעות יום רגיל (${fmtH(vacDayMin())}). יום מחלה נספר בלי תשלום.</p>
       <label class="f">יתרת פתיחה לחודש ${monthLabel(viewMonth)} (שעות, + עבדתי יותר מדיווח / − פחות)
         <input type="number" step="0.25" id="sAdj" value="${((S.months[viewMonth] && S.months[viewMonth].openingAdj) || 0) / 60}"></label>
       <button class="btn block" data-act="save-settings">שמור הגדרות</button>
@@ -791,8 +812,63 @@ function saveSettings() {
   s.defEnd = $('#sEnd').value || s.defEnd;
   s.workdays = [...document.querySelectorAll('[data-wd]')].filter(c => c.checked).map(c => +c.dataset.wd);
   s.theme = $('#sTheme').value;
+  s.vacQuota = +$('#sVacQ').value || 0;
+  s.vacExtra = { ...(s.vacExtra || {}), [todayKey().slice(0, 4)]: +$('#sVacX').value || 0 };
   monthMeta(viewMonth).openingAdj = Math.round((+$('#sAdj').value || 0) * 60);
   save(); render(); toast('ההגדרות נשמרו', true);
+}
+
+// ---------- Help ----------
+// Help lives outside the main state (S) so wiping or restoring data doesn't re-trigger the first-run sheet.
+const HELP_KEY = 'wh.helpSeen';
+const HELP_SECTIONS = {
+  home: ['🏠 בית — כל יום', `
+    <ul>
+      <li>מגיעים לעבודה ← לוחצים על הכפתור הגדול <b>"הגעתי לעבודה"</b>.</li>
+      <li>יוצאים מהעבודה ← לוחצים עליו שוב, <b>"יצאתי מהעבודה"</b>.</li>
+    </ul>
+    <p class="small muted">זה כל מה שצריך ברוב הימים. הכפתורים הקטנים הם רק למקרים חריגים:</p>
+    <ul>
+      <li>🏖️ <b>יום חופש</b>: משולם ויורד מיתרת החופש השנתית.</li>
+      <li>🤒 <b>מחלה</b>: נספר, בלי תשלום.</li>
+      <li>✏️ <b>עריכת היום</b>: שכחת ללחוץ או לחצת בשעה לא נכונה.</li>
+      <li>➕ <b>הוספת יום</b>: הוספה או תיקון של יום קודם.</li>
+      <li>↩️ <b>ביטול פעולה</b>: לחצת בטעות.</li>
+    </ul>
+    <p class="small muted">אם שכחת לסמן יציאה, תופיע למעלה התראה עם כפתור "הזן שעת יציאה".</p>`],
+  sheet: ['📋 גיליון — צפייה ותיקון', `
+    <ul>
+      <li>כל ימי החודש, כל יום עם צבע ואייקון. החצים ‹ › מעבירים בין חודשים.</li>
+      <li>לחיצה על יום פותחת אותו לעריכה: שעות <b>בפועל</b> (מה שעבדת) ו<b>דיווח</b> (מה שנשלח לשכר).</li>
+      <li>לא ברור מה אומר צבע או אייקון? למטה יש <b>מקרא</b>.</li>
+    </ul>`],
+  finish: ['✅ סיום דיווח — פעם בחודש', `
+    <p class="small muted">כשמתקרב מועד ההגשה מופיעה התראה. עוברים מלמעלה למטה; שלב שלא רלוונטי פשוט לא מופיע או שמדלגים עליו.</p>
+    <ol>
+      <li><b>שעות עתידיות</b>: ממלאים את הימים שעוד לא קרו עד סוף החודש.</li>
+      <li><b>יתרה מהחודש הקודם</b>: רק אם יש.</li>
+      <li><b>פיזור שעות מעל 8</b>: רק אם היו ימים ארוכים.</li>
+      <li><b>📋 העתק</b> ← מדביקים במערכת השכר ← <b>✅ סמן שהדוח הוגש</b>.</li>
+    </ol>
+    <p class="small muted">אחרי ההגשה ממשיכים ללחוץ "הגעתי"/"יצאתי" כרגיל. אם עבדת יותר או פחות ממה שדיווחת, זה יסומן ויעבור לחודש הבא.</p>`],
+  settings: ['⚙️ הגדרות — פעם אחת בהתחלה', `
+    <ul>
+      <li>ממלאים <b>שכר לשעה</b>, <b>יום הגשת הדוח</b>, <b>שעות רגילות</b> ו<b>ימי חופש בשנה</b> ← "שמור הגדרות".</li>
+      <li>השעות רשומות בוואטסאפ? <b>💬 ייבוא היסטוריה מוואטסאפ</b> ומדביקים את הצ'אט.</li>
+      <li>המידע נשמר רק בטלפון. כדאי לעשות <b>💾 גיבוי</b> מדי פעם.</li>
+    </ul>`],
+};
+function openHelp() {
+  // Expand the section for the tab the user is on, so "?" answers "what is this screen".
+  const tab = (location.hash || '#home').slice(1).split('/')[0];
+  const cur = HELP_SECTIONS[tab] ? tab : 'home';
+  modal(`<div class="help"><h2>איך משתמשים</h2>
+    <div class="tldr"><b>בקיצור:</b> כל יום "הגעתי" ו"יצאתי". פעם בחודש "סיום דיווח". זהו.</div>
+    ${Object.entries(HELP_SECTIONS).map(([id, [title, body]]) =>
+      `<details ${id === cur ? 'open' : ''}><summary>${title}</summary>${body}</details>`).join('')}
+    <button class="btn block" data-close style="margin-top:12px">הבנתי</button></div>`);
+  $('#modal-body [data-close]').onclick = closeModal;
+  try { localStorage.setItem(HELP_KEY, '1'); } catch (e) { /* private mode — just show again next time */ }
 }
 
 // ---------- Modal / toast ----------
@@ -838,6 +914,7 @@ document.addEventListener('click', ev => {
     case 'save-settings': saveSettings(); break;
     case 'backup': download(`work-hours-backup-${todayKey()}.json`, JSON.stringify(S, null, 2), 'application/json'); break;
     case 'wa-import': openWhatsAppImport(); break;
+    case 'help': openHelp(); break;
     case 'wipe':
       if (confirm('למחוק את כל הנתונים? מומלץ לגבות קודם.')) { snapshot(); S = blank(); save(); render(); toast('נמחק', true); }
       break;
@@ -851,6 +928,8 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && $(
 viewMonth = monthKey(todayKey());
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js');
 render();
+// First launch only: show the guide once. Users who imported/entered data before this feature existed skip it.
+try { if (!localStorage.getItem(HELP_KEY) && !Object.keys(S.days).length) openHelp(); } catch (e) { /* ignore */ }
 
 // לשימוש עתידי באוטומציה (למשל הזנה אוטומטית בדפדפן): window.WorkHours.report('2026-11')
 window.WorkHours = { report: mk => ({ month: mk, days: monthRows(mk) }), state: () => S };
